@@ -30,6 +30,14 @@ from paperqa_nemotron.api import (
 
 logger = logging.getLogger(__name__)
 
+# Try to import PyMuPDF for fallback parsing
+try:
+    from paperqa_pymupdf import parse_pdf_to_pages as pymupdf_parse_pdf
+    PYMUPDF_AVAILABLE = True
+except ImportError:
+    PYMUPDF_AVAILABLE = False
+    pymupdf_parse_pdf = None  # type: ignore[assignment,misc]
+
 WHITE_RGB = (255, 255, 255)
 # On DOI 10.1016/j.neuron.2011.12.023, 36-px was an insufficient border,
 # then on DOI 10.1111/jnc.13398, 42-px was an insufficient border,
@@ -228,13 +236,69 @@ async def parse_pdf_to_pages(
                     )
             except NemotronLengthError as length_err:
                 # This length failure is from the detection_only tool
+                # Log the failure with page and PDF details
+                logger.warning(
+                    "Nemotron-parse failed on page %d of PDF %r due to NemotronLengthError. "
+                    "Falling back to PyMuPDF for this page.",
+                    i + 1,  # Convert to 1-indexed for logging
+                    str(path),
+                )
+                
+                # Try to fall back to PyMuPDF for this page
+                if PYMUPDF_AVAILABLE and pymupdf_parse_pdf is not None:
+                    try:
+                        # Parse just this one page with PyMuPDF (1-indexed)
+                        pymupdf_result = pymupdf_parse_pdf(
+                            path,
+                            page_range=(i + 1, i + 1),  # 1-indexed, inclusive
+                            page_size_limit=page_size_limit,
+                            parse_media=parse_media,
+                            full_page=full_page,
+                            dpi=dpi,
+                        )
+                        # Extract the page content from PyMuPDF result
+                        page_key = str(i + 1)
+                        if page_key in pymupdf_result.content:
+                            page_content = pymupdf_result.content[page_key]
+                            if isinstance(page_content, tuple):
+                                text, media = page_content
+                            else:
+                                text = page_content
+                                media = []
+                            logger.info(
+                                "Successfully parsed page %d of %r using PyMuPDF fallback.",
+                                i + 1,
+                                str(path),
+                            )
+                            return (str(i + 1), (text, media) if parse_media else text)
+                        else:
+                            logger.error(
+                                "PyMuPDF fallback returned no content for page %d of %r.",
+                                i + 1,
+                                str(path),
+                            )
+                    except Exception as pymupdf_err:
+                        logger.error(
+                            "PyMuPDF fallback also failed for page %d of %r: %s",
+                            i + 1,
+                            str(path),
+                            pymupdf_err,
+                        )
+                else:
+                    logger.warning(
+                        "PyMuPDF not available for fallback. Install with: "
+                        "pip install paper-qa[pymupdf]"
+                    )
+                
+                # If fallback failed or not available, raise the original error
                 raise RuntimeError(
-                    f"Failed to attain a valid response for page {i}"
+                    f"Failed to attain a valid response for page {i + 1}"
                     f" of PDF at path {path!r}"
                     f" due to NemotronLengthError."
                     " Perhaps try tweaking parameters such as"
                     f" increasing DPI {dpi} or increasing API parameter's"
                     f" temperature {api_params.get('temperature')}."
+                    " PyMuPDF fallback was attempted but failed."
                 ) from length_err
             except RetryError as model_err:
                 if isinstance(model_err.last_attempt._exception, NemotronBBoxError):
