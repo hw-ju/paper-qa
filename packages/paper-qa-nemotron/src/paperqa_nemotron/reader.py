@@ -183,6 +183,44 @@ async def parse_pdf_to_pages(
                     )
                 except NemotronLengthError:
                     if tool_name != "markdown_bbox":
+                        # markdown_no_bbox failed - try PyMuPDF fallback
+                        logger.warning(
+                            "Nemotron-parse (markdown_no_bbox) failed on page %d of PDF %r "
+                            "due to NemotronLengthError. Falling back to PyMuPDF.",
+                            i + 1,
+                            str(path),
+                        )
+                        if PYMUPDF_AVAILABLE and pymupdf_parse_pdf is not None:
+                            try:
+                                pymupdf_result = pymupdf_parse_pdf(
+                                    path,
+                                    page_range=(i + 1, i + 1),
+                                    page_size_limit=page_size_limit,
+                                    parse_media=parse_media,
+                                    full_page=full_page,
+                                    dpi=dpi,
+                                )
+                                page_key = str(i + 1)
+                                if page_key in pymupdf_result.content:
+                                    page_content = pymupdf_result.content[page_key]
+                                    if isinstance(page_content, tuple):
+                                        fallback_text, fallback_media = page_content
+                                    else:
+                                        fallback_text = page_content
+                                        fallback_media = []
+                                    logger.info(
+                                        "Successfully parsed page %d of %r using PyMuPDF fallback.",
+                                        i + 1,
+                                        str(path),
+                                    )
+                                    return (str(i + 1), (fallback_text, fallback_media) if parse_media else fallback_text)
+                            except Exception as pymupdf_err:
+                                logger.error(
+                                    "PyMuPDF fallback also failed for page %d of %r: %s",
+                                    i + 1,
+                                    str(path),
+                                    pymupdf_err,
+                                )
                         raise
                     # Fallback to detection_only + markdown_no_bbox to reinvent
                     # markdown_bbox, bypassing its length error
@@ -302,15 +340,109 @@ async def parse_pdf_to_pages(
                 ) from length_err
             except RetryError as model_err:
                 if isinstance(model_err.last_attempt._exception, NemotronBBoxError):
-                    # Nice-ify nemotron-parse failures to speed debugging
+                    # Log the failure with page and PDF details
+                    logger.warning(
+                        "Nemotron-parse failed on page %d of PDF %r due to NemotronBBoxError. "
+                        "Falling back to PyMuPDF for this page.",
+                        i + 1,  # Convert to 1-indexed for logging
+                        str(path),
+                    )
+                    
+                    # Try to fall back to PyMuPDF for this page
+                    if PYMUPDF_AVAILABLE and pymupdf_parse_pdf is not None:
+                        try:
+                            # Parse just this one page with PyMuPDF (1-indexed)
+                            pymupdf_result = pymupdf_parse_pdf(
+                                path,
+                                page_range=(i + 1, i + 1),  # 1-indexed, inclusive
+                                page_size_limit=page_size_limit,
+                                parse_media=parse_media,
+                                full_page=full_page,
+                                dpi=dpi,
+                            )
+                            # Extract the page content from PyMuPDF result
+                            page_key = str(i + 1)
+                            if page_key in pymupdf_result.content:
+                                page_content = pymupdf_result.content[page_key]
+                                if isinstance(page_content, tuple):
+                                    text, media = page_content
+                                else:
+                                    text = page_content
+                                    media = []
+                                logger.info(
+                                    "Successfully parsed page %d of %r using PyMuPDF fallback (BBoxError).",
+                                    i + 1,
+                                    str(path),
+                                )
+                                return (str(i + 1), (text, media) if parse_media else text)
+                            else:
+                                logger.error(
+                                    "PyMuPDF fallback returned no content for page %d of %r.",
+                                    i + 1,
+                                    str(path),
+                                )
+                        except Exception as pymupdf_err:
+                            logger.error(
+                                "PyMuPDF fallback also failed for page %d of %r: %s",
+                                i + 1,
+                                str(path),
+                                pymupdf_err,
+                            )
+                    else:
+                        logger.warning(
+                            "PyMuPDF not available for fallback. Install with: "
+                            "pip install paper-qa[pymupdf]"
+                        )
+                    
+                    # If fallback failed or not available, raise the original error
                     raise RuntimeError(  # noqa: TRY004
-                        f"Failed to attain a valid response for page {i}"
+                        f"Failed to attain a valid response for page {i + 1}"
                         f" of PDF at path {path!r}"
                         f" due to {type(model_err.last_attempt._exception).__name__}."
                         " Perhaps try tweaking parameters such as"
                         f" increasing DPI {dpi} or increasing API parameter's"
                         f" temperature {api_params.get('temperature')}."
+                        " PyMuPDF fallback was attempted but failed."
                     ) from model_err
+                # Other RetryError (not BBoxError) - try PyMuPDF fallback
+                logger.warning(
+                    "Nemotron-parse failed on page %d of PDF %r due to %s. "
+                    "Falling back to PyMuPDF.",
+                    i + 1,
+                    str(path),
+                    type(model_err.last_attempt._exception).__name__ if model_err.last_attempt._exception else "unknown error",
+                )
+                if PYMUPDF_AVAILABLE and pymupdf_parse_pdf is not None:
+                    try:
+                        pymupdf_result = pymupdf_parse_pdf(
+                            path,
+                            page_range=(i + 1, i + 1),
+                            page_size_limit=page_size_limit,
+                            parse_media=parse_media,
+                            full_page=full_page,
+                            dpi=dpi,
+                        )
+                        page_key = str(i + 1)
+                        if page_key in pymupdf_result.content:
+                            page_content = pymupdf_result.content[page_key]
+                            if isinstance(page_content, tuple):
+                                fallback_text, fallback_media = page_content
+                            else:
+                                fallback_text = page_content
+                                fallback_media = []
+                            logger.info(
+                                "Successfully parsed page %d of %r using PyMuPDF fallback (RetryError).",
+                                i + 1,
+                                str(path),
+                            )
+                            return (str(i + 1), (fallback_text, fallback_media) if parse_media else fallback_text)
+                    except Exception as pymupdf_err:
+                        logger.error(
+                            "PyMuPDF fallback also failed for page %d of %r: %s",
+                            i + 1,
+                            str(path),
+                            pymupdf_err,
+                        )
                 raise
             del image_for_api  # Free up memory as API call is done
 
