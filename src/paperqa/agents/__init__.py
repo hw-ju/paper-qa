@@ -41,13 +41,11 @@ LOG_VERBOSITY_MAP: dict[int, dict[str, int]] = {
 LOG_VERBOSITY_MAP[1] = LOG_VERBOSITY_MAP[0] | {
     "paperqa.models": logging.INFO,
     "paperqa.agents.main": logging.INFO,
-    "paperqa.agents.main.agent_request": logging.INFO,  # log each agent LLM request body + length
 }
 LOG_VERBOSITY_MAP[2] = LOG_VERBOSITY_MAP[1] | {
     "paperqa.models": logging.DEBUG,
     "paperqa.agents.helpers": logging.DEBUG,
     "paperqa.agents.main": logging.DEBUG,
-    "paperqa.agents.main.agent_request": logging.INFO,
     "paperqa.agents.main.agent_callers": logging.DEBUG,
     "paperqa.agents.search": logging.DEBUG,
     "LiteLLM": logging.INFO,
@@ -83,9 +81,10 @@ def set_up_rich_handler(install: bool = True) -> RichHandler:
 
 def configure_log_verbosity(verbosity: int = 0) -> None:
     key = min(verbosity, _MAX_PRESET_VERBOSITY)
+    preset = LOG_VERBOSITY_MAP.get(key, {})
     for logger_name, logger_ in logging.Logger.manager.loggerDict.items():
         if isinstance(logger_, logging.Logger) and (
-            log_level := LOG_VERBOSITY_MAP.get(key, {}).get(logger_name)
+            log_level := preset.get(logger_name)
         ):
             logger_.setLevel(log_level)
 

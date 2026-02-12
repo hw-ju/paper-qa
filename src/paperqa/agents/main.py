@@ -48,11 +48,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 agent_logger = logging.getLogger(__name__ + ".agent_callers")
-# Log each exact request body sent to the agent LLM (e.g. nemotron-3-nano) and its length
-agent_request_logger = logging.getLogger(__name__ + ".agent_request")
 
-# Max chars of request body to log in full; beyond this we log truncated + total length
-_AGENT_REQUEST_LOG_TRUNCATE_CHARS = 20_000
+# Max chars of request body to print in full; beyond this we print truncated + total length
+_AGENT_REQUEST_PRINT_TRUNCATE_CHARS = 20_000
 
 
 def _serialize_agent_messages_for_logging(messages: list[Message]) -> tuple[list[Any], int]:
@@ -330,26 +328,19 @@ async def run_aviary_agent(
                 )
                 return AgentStatus.TRUNCATED
             agent_state.messages += obs
-            if agent_request_logger.isEnabledFor(logging.INFO):
-                body, body_len = _serialize_agent_messages_for_logging(
-                    agent_state.messages
+            body, body_len = _serialize_agent_messages_for_logging(
+                agent_state.messages
+            )
+            print(
+                f"[agent LLM request] step={timestep + 1} length={body_len} chars"
+            )
+            body_str = json.dumps(body, ensure_ascii=False, indent=2)
+            if len(body_str) > _AGENT_REQUEST_PRINT_TRUNCATE_CHARS:
+                print(
+                    f"[agent LLM request] body (truncated):\n{body_str[:_AGENT_REQUEST_PRINT_TRUNCATE_CHARS]}\n... [truncated, total {body_len} chars]"
                 )
-                agent_request_logger.info(
-                    "[agent LLM request] step=%s length=%s chars",
-                    timestep + 1,
-                    body_len,
-                )
-                body_str = json.dumps(body, ensure_ascii=False, indent=2)
-                if len(body_str) > _AGENT_REQUEST_LOG_TRUNCATE_CHARS:
-                    agent_request_logger.info(
-                        "[agent LLM request] body (truncated):\n%s\n... [truncated, total %s chars]",
-                        body_str[:_AGENT_REQUEST_LOG_TRUNCATE_CHARS],
-                        body_len,
-                    )
-                else:
-                    agent_request_logger.info(
-                        "[agent LLM request] body:\n%s", body_str
-                    )
+            else:
+                print(f"[agent LLM request] body:\n{body_str}")
             for attempt in Retrying(
                 stop=stop_after_attempt(5),
                 retry=retry_if_exception_type(MalformedMessageError),
