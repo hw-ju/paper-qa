@@ -41,11 +41,13 @@ LOG_VERBOSITY_MAP: dict[int, dict[str, int]] = {
 LOG_VERBOSITY_MAP[1] = LOG_VERBOSITY_MAP[0] | {
     "paperqa.models": logging.INFO,
     "paperqa.agents.main": logging.INFO,
+    "paperqa.agents.main.agent_request": logging.INFO,  # log each agent LLM request body + length
 }
 LOG_VERBOSITY_MAP[2] = LOG_VERBOSITY_MAP[1] | {
     "paperqa.models": logging.DEBUG,
     "paperqa.agents.helpers": logging.DEBUG,
     "paperqa.agents.main": logging.DEBUG,
+    "paperqa.agents.main.agent_request": logging.INFO,
     "paperqa.agents.main.agent_callers": logging.DEBUG,
     "paperqa.agents.search": logging.DEBUG,
     "LiteLLM": logging.INFO,

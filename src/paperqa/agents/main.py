@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
@@ -47,6 +48,29 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 agent_logger = logging.getLogger(__name__ + ".agent_callers")
+# Log each exact request body sent to the agent LLM (e.g. nemotron-3-nano) and its length
+agent_request_logger = logging.getLogger(__name__ + ".agent_request")
+
+# Max chars of request body to log in full; beyond this we log truncated + total length
+_AGENT_REQUEST_LOG_TRUNCATE_CHARS = 20_000
+
+
+def _serialize_agent_messages_for_logging(messages: list[Message]) -> tuple[list[Any], int]:
+    """Serialize agent messages to the same list-of-dicts form sent to the NIM. Returns (body, char_length)."""
+    try:
+        from aviary.tools.utils import MessagesAdapter
+
+        body = MessagesAdapter.dump_python(
+            messages, exclude_none=True, by_alias=True
+        )
+    except Exception:
+        body = [
+            m.model_dump(exclude_none=True, by_alias=True)
+            for m in messages
+            if hasattr(m, "model_dump")
+        ]
+    body_str = json.dumps(body, ensure_ascii=False)
+    return body, len(body_str)
 
 DEFAULT_AGENT_TYPE = AgentSettings.model_fields["agent_type"].default
 
@@ -306,6 +330,26 @@ async def run_aviary_agent(
                 )
                 return AgentStatus.TRUNCATED
             agent_state.messages += obs
+            if agent_request_logger.isEnabledFor(logging.INFO):
+                body, body_len = _serialize_agent_messages_for_logging(
+                    agent_state.messages
+                )
+                agent_request_logger.info(
+                    "[agent LLM request] step=%s length=%s chars",
+                    timestep + 1,
+                    body_len,
+                )
+                body_str = json.dumps(body, ensure_ascii=False, indent=2)
+                if len(body_str) > _AGENT_REQUEST_LOG_TRUNCATE_CHARS:
+                    agent_request_logger.info(
+                        "[agent LLM request] body (truncated):\n%s\n... [truncated, total %s chars]",
+                        body_str[:_AGENT_REQUEST_LOG_TRUNCATE_CHARS],
+                        body_len,
+                    )
+                else:
+                    agent_request_logger.info(
+                        "[agent LLM request] body:\n%s", body_str
+                    )
             for attempt in Retrying(
                 stop=stop_after_attempt(5),
                 retry=retry_if_exception_type(MalformedMessageError),
