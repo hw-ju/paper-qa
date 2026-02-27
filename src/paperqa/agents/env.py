@@ -227,6 +227,12 @@ class PaperQAEnvironment(Environment[EnvironmentState]):
         self._summary_llm_model = summary_llm_model
         self._embedding_model = embedding_model
         self._session_id = session_id
+        self._step_metadata: dict[str, Any] = {}
+
+    def get_step_metadata(self) -> dict[str, Any]:
+        """Return metadata from the last step (e.g. contexts after gather_evidence) and clear it."""
+        meta, self._step_metadata = self._step_metadata, {}
+        return meta
 
     @classmethod
     def from_task(cls, task: str) -> Self:
@@ -311,6 +317,7 @@ class PaperQAEnvironment(Environment[EnvironmentState]):
     ) -> tuple[Messages, float, bool, bool]:
         self.state.record_action(action)
 
+        self._step_metadata = {}
         response_messages = cast(
             "list[Message]",
             await self.exec_tool_calls(
@@ -320,6 +327,40 @@ class PaperQAEnvironment(Environment[EnvironmentState]):
                 handle_tool_exc=True,
             ),
         ) or [Message(content=f"No tool calls input in tool request {action}.")]
+        if getattr(action, "tool_calls", None):
+            for tc in action.tool_calls:
+                if getattr(tc, "function", None) and getattr(
+                    tc.function, "name", None
+                ) == GatherEvidence.TOOL_FN_NAME:
+                    # Store (raw chunk, summary) pairs for inspection; include
+                    # media as data URLs so notebooks can display images/tables.
+                    contexts_out: list[dict[str, Any]] = []
+                    for c in self.state.session.contexts:
+                        raw_media: list[dict[str, Any]] = []
+                        for m in c.text.media:
+                            info_safe = {
+                                k: v
+                                for k, v in m.info.items()
+                                if isinstance(
+                                    v, (str, int, float, bool, type(None))
+                                )
+                            }
+                            raw_media.append(
+                                {
+                                    "data_url": m.to_image_url(),
+                                    "info": info_safe,
+                                }
+                            )
+                        contexts_out.append(
+                            {
+                                "summary": c.context,
+                                "score": c.score,
+                                "raw_text": c.text.text,
+                                "raw_media": raw_media,
+                            }
+                        )
+                    self._step_metadata["contexts"] = contexts_out
+                    break
         done = any(
             isinstance(msg, ToolResponseMessage)
             and msg.name == Complete.complete.__name__
